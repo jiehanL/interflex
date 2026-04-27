@@ -10,7 +10,8 @@ interflex(estimator, data, Y, D, X, treat.type = NULL,
   vcov.type = "robust", time = NULL, pairwise = TRUE, nboots = 200,
   nsimu = 1000, parallel = TRUE, cores = NULL, cl = NULL, Z.ref = NULL,
   D.ref = NULL, nbins = 3, cutoffs = NULL, wald = TRUE, bw = NULL,
-  kfold = 10, grid = 30, metric = NULL, model.y = "rf",
+  kfold = 10, grid = 30, metric = NULL, cv.repeats = 1,
+  cv.seed = NULL, bw.rule = c("min"), model.y = "rf",
   param.y = NULL, param.grid.y = NULL,
   scoring.y = "neg_mean_squared_error", model.t = "rf", param.t = NULL,
   param.grid.t = NULL, scoring.t = "neg_mean_squared_error", CV = FALSE,
@@ -67,6 +68,9 @@ interflex(estimator, data, Y, D, X, treat.type = NULL,
   \item{kfold}{an integer specifying the number of folds used in cross-validation for bandwidth selection (kernel estimator).}
   \item{grid}{either an integer indicating the number of candidate bandwidths in a grid search, or a numeric vector of candidate bandwidths (kernel estimator; ignored if \bold{bw} is specified).}
   \item{metric}{a string specifying the criterion used in cross-validation to select bandwidth: one of "MSE", "MAE", "Cross Entropy", or "AUC". Default is "MSE" for non-binary outcomes and "Cross Entropy" for binary outcomes.}
+  \item{cv.repeats}{an integer specifying the number of repeated K-fold CV runs for kernel bandwidth selection. Larger values improve stability at higher compute cost.}
+  \item{cv.seed}{optional seed used to make repeated K-fold CV splits reproducible for kernel bandwidth selection.}
+  \item{bw.rule}{kernel bandwidth selection rule after computing CV scores: \code{"min"} chooses the minimum-score bandwidth; \code{"1se"} applies a one-standard-error rule and picks the largest bandwidth within one SD of the minimum score.}
   \item{model.y}{outcome model used by \bold{estimator}="dml" (and also used by \bold{estimator}="lasso"). In the DML estimator, this string is passed to the underlying Python implementation (default "rf").}
   \item{param.y}{named list of hyper-parameters for the DML outcome model (passed to Python).}
   \item{param.grid.y}{named list specifying a hyper-parameter search grid for the DML outcome model (passed to Python; used when \bold{CV} = TRUE).}
@@ -187,6 +191,5 @@ data = s1)
 
 
 }
-
 
 
