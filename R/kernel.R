@@ -8,6 +8,9 @@ interflex.kernel <- function(data,
                              kfold = 10,
                              grid = 30,
                              metric = "MSE",
+                             cv.repeats = 1,
+                             cv.seed = NULL,
+                             bw.rule = c("min"),
                              Z = NULL, # covariates
                              FE = NULL, # fixed effects
                              IV = NULL, # instrumental variables
@@ -66,6 +69,17 @@ interflex.kernel <- function(data,
         if ((0 %in% unique(data[, Y])) & (1 %in% unique(data[, Y]))) {
             binary <- TRUE
         }
+    }
+    if (!is.numeric(cv.repeats) || length(cv.repeats) != 1 || is.na(cv.repeats) || cv.repeats < 1) {
+        stop("\"cv.repeats\" must be a positive integer.")
+    }
+    cv.repeats <- as.integer(cv.repeats)
+    if (!is.null(cv.seed) && (!is.numeric(cv.seed) || length(cv.seed) != 1 || is.na(cv.seed))) {
+        stop("\"cv.seed\" must be NULL or a single numeric value.")
+    }
+    bw.rule <- bw.rule[1]
+    if (!bw.rule %in% c("min", "1se")) {
+        stop("\"bw.rule\" must be one of: \"min\", \"1se\".")
     }
 
     diff.values.plot <- diff.info[["diff.values.plot"]]
@@ -590,7 +604,7 @@ interflex.kernel <- function(data,
             # demean -> use wls without fixed effects#
             if (is.null(IV)) {
                 coef.grid.cv <- c()
-                for (x in X.eval) {
+                for (x in X.eval.cv) {
                     coef.grid.cv <- rbind(coef.grid.cv, wls.nofe(x = x, data = train, bw = bw, weights = w.touse.cv, Xdensity = Xdensity)$result)
                 }
             } else {
@@ -740,21 +754,18 @@ interflex.kernel <- function(data,
             names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
             return(output)
         }
-        fold <- createFolds(factor(data[, D]), k = kfold, list = FALSE)
-        # kfold <- min(n,kfold)
-        # cat("#folds =",kfold)
-        # cat("\n")
-        # fold <- c(0:(n-1))%%kfold + 1
-        # fold <- sample(fold, n, replace = FALSE)
-
-        cv.new <- function(bw, neval) {
-            error <- matrix(NA, kfold, 5)
-            for (j in 1:kfold) { # K-fold CV
-                testid <- which(fold == j)
-                train <- data[-testid, ]
-                test <- data[testid, ]
-                suppressWarnings(Xdensity.train <- density(data[-testid, X], weights = w[-testid]))
-                error[j, ] <- getError.CV(train = train, test = test, bw = bw, neval = neval, weights_name = "WEIGHTS", Xdensity = Xdensity.train)
+        cv.new <- function(bw, neval, fold.list) {
+            error <- matrix(NA, kfold * cv.repeats, 5)
+            rowid <- 1
+            for (r in 1:cv.repeats) {
+                for (j in 1:kfold) { # K-fold CV
+                    testid <- which(fold.list[[r]] == j)
+                    train <- data[-testid, ]
+                    test <- data[testid, ]
+                    suppressWarnings(Xdensity.train <- density(data[-testid, X], weights = w[-testid]))
+                    error[rowid, ] <- getError.CV(train = train, test = test, bw = bw, neval = neval, weights_name = "WEIGHTS", Xdensity = Xdensity.train)
+                    rowid <- rowid + 1
+                }
             }
 
             colnames(error) <- c("Num.Eff.Points", "cross entropy", "auc", "L2", "L1")
@@ -778,6 +789,11 @@ interflex.kernel <- function(data,
         # return(try)
         ##
 
+        if (!is.null(cv.seed)) {
+            set.seed(cv.seed)
+        }
+        fold.list <- lapply(1:cv.repeats, function(.r) createFolds(factor(data[, D]), k = kfold, list = FALSE))
+
         ## -----------------------------------------------------------------------------------
         if (parallel) {
             maxcores <- parallelly::availableCores()
@@ -798,7 +814,7 @@ interflex.kernel <- function(data,
                     .inorder = FALSE,
                     .options.future = list(seed = TRUE)
                 ) %op% {
-                    cv.output.sub <- try(cv.new(bw, neval = neval), silent = TRUE)
+                    cv.output.sub <- try(cv.new(bw, neval = neval, fold.list = fold.list), silent = TRUE)
                     p()
                     if ("try-error" %in% class(cv.output.sub)) {
                         return(NA)
@@ -813,7 +829,7 @@ interflex.kernel <- function(data,
             cli::cli_progress_bar("Cross-validation", total = length(bw.grid),
                                   clear = TRUE)
             for (i in 1:length(bw.grid)) {
-                suppressWarnings(cv.output.sub <- try(cv.new(bw = bw.grid[i], neval = neval), silent = FALSE))
+                suppressWarnings(cv.output.sub <- try(cv.new(bw = bw.grid[i], neval = neval, fold.list = fold.list), silent = FALSE))
                 if ("try-error" %in% class(cv.output.sub)) {
                     Error[i, ] <- NA
                 } else {
@@ -827,6 +843,7 @@ interflex.kernel <- function(data,
         colnames(Error) <- c("bw", "Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
         rownames(Error) <- NULL
 
+        score <- NULL
         if (!binary) {
             if (method == "poisson" | method == "nbinom") {
                 colnames(Error) <- c("bw", "Num.Eff.Points", "MSE.link", "MAE.link", "MSE", "MAE")
@@ -834,26 +851,41 @@ interflex.kernel <- function(data,
                 Error <- Error[, c("bw", "Num.Eff.Points", "MSE", "MAE")]
             }
             if (metric == "MSE") {
-                bw <- bw.grid[which.min(Error[, "MSE"] / Error[, "Num.Eff.Points"])]
+                score <- Error[, "MSE"] / Error[, "Num.Eff.Points"]
             }
             if (metric == "MAE") {
-                bw <- bw.grid[which.min(Error[, "MAE"] / Error[, "Num.Eff.Points"])]
+                score <- Error[, "MAE"] / Error[, "Num.Eff.Points"]
             }
         }
         if (binary) {
             if (metric == "MSE") {
-                bw <- bw.grid[which.min(Error[, "MSE"] / Error[, "Num.Eff.Points"])]
+                score <- Error[, "MSE"] / Error[, "Num.Eff.Points"]
             }
             if (metric == "MAE") {
-                bw <- bw.grid[which.min(Error[, "MAE"] / Error[, "Num.Eff.Points"])]
+                score <- Error[, "MAE"] / Error[, "Num.Eff.Points"]
             }
             if (metric == "Cross Entropy") {
-                bw <- bw.grid[which.min(Error[, "Cross Entropy"] / Error[, "Num.Eff.Points"])]
+                score <- Error[, "Cross Entropy"] / Error[, "Num.Eff.Points"]
             }
             if (metric == "AUC") {
-                bw <- bw.grid[which.max(Error[, "AUC"] * Error[, "Num.Eff.Points"])]
+                score <- -(Error[, "AUC"] * Error[, "Num.Eff.Points"])
             }
         }
+        if (all(is.na(score))) {
+            stop("Unable to select bandwidth: all CV scores are NA.")
+        }
+        min.id <- which.min(score)
+        if (bw.rule == "1se") {
+            score.sd <- stats::sd(score, na.rm = TRUE)
+            if (is.finite(score.sd)) {
+                threshold <- score[min.id] + score.sd
+                candidates <- which(score <= threshold)
+                if (length(candidates) > 0) {
+                    min.id <- max(candidates)
+                }
+            }
+        }
+        bw <- bw.grid[min.id]
         cat(paste0("Optimal bw=", round(bw, 4), ".\n"))
     } else {
         Error <- NULL

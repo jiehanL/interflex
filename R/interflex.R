@@ -35,6 +35,9 @@ interflex <- function(estimator, # "linear", "kernel", "binning" , "gam", "raw",
                       kfold = 10,
                       grid = 30,
                       metric = NULL,
+                      cv.repeats = 1,
+                      cv.seed = NULL,
+                      bw.rule = c("min"),
                       model.y = "rf",
                       param.y = NULL,
                       param.grid.y = NULL,
@@ -685,6 +688,19 @@ interflex <- function(estimator, # "linear", "kernel", "binning" , "gam", "raw",
         }
     }
 
+    # kernel CV stability controls
+    if (!is.numeric(cv.repeats) || length(cv.repeats) != 1 || is.na(cv.repeats) || cv.repeats < 1) {
+        stop("\"cv.repeats\" must be a positive integer.")
+    }
+    cv.repeats <- as.integer(cv.repeats)
+    if (!is.null(cv.seed) && (!is.numeric(cv.seed) || length(cv.seed) != 1 || is.na(cv.seed))) {
+        stop("\"cv.seed\" must be NULL or a single numeric value.")
+    }
+    bw.rule <- bw.rule[1]
+    if (!bw.rule %in% c("min", "1se")) {
+        stop("\"bw.rule\" must be one of: \"min\", \"1se\".")
+    }
+
 
     # Xunif
     if (Xunif) {
@@ -1183,6 +1199,9 @@ interflex <- function(estimator, # "linear", "kernel", "binning" , "gam", "raw",
             grid = grid,
             kfold = kfold,
             metric = metric,
+            cv.repeats = cv.repeats,
+            cv.seed = cv.seed,
+            bw.rule = bw.rule,
             Z = Z, # covariates
             FE = FE, # fixed effects
             IV = IV, # instrumental variables
