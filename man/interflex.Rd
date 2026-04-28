@@ -11,7 +11,9 @@ interflex(estimator, data, Y, D, X, treat.type = NULL,
   nsimu = 1000, parallel = TRUE, cores = NULL, cl = NULL, Z.ref = NULL,
   D.ref = NULL, nbins = 3, cutoffs = NULL, wald = TRUE, bw = NULL,
   kfold = 10, grid = 30, metric = NULL, cv.repeats = 1,
-  cv.seed = NULL, bw.rule = c("min"), model.y = "rf",
+  cv.seed = NULL, bw.rule = c("min"), cv.neff.min = NULL,
+  cv.neff.min.frac = 0, cv.neff.mode = c("off", "hard", "penalty"),
+  cv.neff.penalty = 1, model.y = "rf",
   param.y = NULL, param.grid.y = NULL,
   scoring.y = "neg_mean_squared_error", model.t = "rf", param.t = NULL,
   param.grid.t = NULL, scoring.t = "neg_mean_squared_error", CV = FALSE,
@@ -71,6 +73,10 @@ interflex(estimator, data, Y, D, X, treat.type = NULL,
   \item{cv.repeats}{an integer specifying the number of repeated K-fold CV runs for kernel bandwidth selection. Larger values improve stability at higher compute cost.}
   \item{cv.seed}{optional seed used to make repeated K-fold CV splits reproducible for kernel bandwidth selection.}
   \item{bw.rule}{kernel bandwidth selection rule after computing CV scores: \code{"min"} chooses the minimum-score bandwidth; \code{"1se"} applies a one-standard-error rule and picks the largest bandwidth within one SD of the minimum score.}
+  \item{cv.neff.min}{optional positive threshold for effective local sample size \eqn{N_{eff}(x)} used in kernel CV diagnostics. If \code{NULL}, support-aware constraints are disabled.}
+  \item{cv.neff.min.frac}{minimum required fraction (in \code{[0,1]}) of evaluation points whose \eqn{N_{eff}(x)} exceeds \code{cv.neff.min}. Used when \code{cv.neff.mode} is not \code{"off"}.}
+  \item{cv.neff.mode}{support-aware handling in kernel CV: \code{"off"} ignores \eqn{N_{eff}} constraints, \code{"hard"} rejects candidates below \code{cv.neff.min.frac}, and \code{"penalty"} adds a shortfall penalty to the CV score.}
+  \item{cv.neff.penalty}{non-negative penalty multiplier used when \code{cv.neff.mode = "penalty"}. Larger values enforce stronger preference for support-feasible bandwidths.}
   \item{model.y}{outcome model used by \bold{estimator}="dml" (and also used by \bold{estimator}="lasso"). In the DML estimator, this string is passed to the underlying Python implementation (default "rf").}
   \item{param.y}{named list of hyper-parameters for the DML outcome model (passed to Python).}
   \item{param.grid.y}{named list specifying a hyper-parameter search grid for the DML outcome model (passed to Python; used when \bold{CV} = TRUE).}
@@ -191,5 +197,4 @@ data = s1)
 
 
 }
-
 
