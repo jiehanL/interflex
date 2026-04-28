@@ -11,6 +11,10 @@ interflex.kernel <- function(data,
                              cv.repeats = 1,
                              cv.seed = NULL,
                              bw.rule = c("min"),
+                             cv.neff.min = NULL,
+                             cv.neff.min.frac = 0,
+                             cv.neff.mode = c("off", "hard", "penalty"),
+                             cv.neff.penalty = 1,
                              Z = NULL, # covariates
                              FE = NULL, # fixed effects
                              IV = NULL, # instrumental variables
@@ -80,6 +84,19 @@ interflex.kernel <- function(data,
     bw.rule <- bw.rule[1]
     if (!bw.rule %in% c("min", "1se")) {
         stop("\"bw.rule\" must be one of: \"min\", \"1se\".")
+    }
+    cv.neff.mode <- cv.neff.mode[1]
+    if (!cv.neff.mode %in% c("off", "hard", "penalty")) {
+        stop("\"cv.neff.mode\" must be one of: \"off\", \"hard\", \"penalty\".")
+    }
+    if (!is.null(cv.neff.min) && (!is.numeric(cv.neff.min) || length(cv.neff.min) != 1 || is.na(cv.neff.min) || cv.neff.min <= 0)) {
+        stop("\"cv.neff.min\" must be NULL or a positive numeric value.")
+    }
+    if (!is.numeric(cv.neff.min.frac) || length(cv.neff.min.frac) != 1 || is.na(cv.neff.min.frac) || cv.neff.min.frac < 0 || cv.neff.min.frac > 1) {
+        stop("\"cv.neff.min.frac\" must be in [0, 1].")
+    }
+    if (!is.numeric(cv.neff.penalty) || length(cv.neff.penalty) != 1 || is.na(cv.neff.penalty) || cv.neff.penalty < 0) {
+        stop("\"cv.neff.penalty\" must be a non-negative numeric value.")
     }
 
     diff.values.plot <- diff.info[["diff.values.plot"]]
@@ -614,9 +631,21 @@ interflex.kernel <- function(data,
             eff.eval.point <- dim(coef.grid.cv)[1]
             X.eval.cv <- coef.grid.cv[, "x0"]
             if (dim(coef.grid.cv)[1] <= neval / 2) {
-                output <- rep(NA, 5)
-                names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
+                output <- rep(NA, 6)
+                names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE", "Support.Pass")
                 return(output)
+            }
+            support.pass <- NA_real_
+            if (!is.null(cv.neff.min)) {
+                neff.vec <- sapply(X.eval.cv, function(x0) {
+                    k.w <- dnorm((train[, X] - x0) / bw) * w.touse.cv
+                    denom <- sum(k.w^2)
+                    if (denom <= .Machine$double.eps) {
+                        return(0)
+                    }
+                    (sum(k.w)^2) / denom
+                })
+                support.pass <- mean(neff.vec >= cv.neff.min, na.rm = TRUE)
             }
 
             esCoef.cv <- function(x) { ## obtain the coefficients for x[i]
@@ -660,8 +689,8 @@ interflex.kernel <- function(data,
             }
 
             if (dim(test)[1] < 3) {
-                output <- rep(NA, 5)
-                names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
+                output <- rep(NA, 6)
+                names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE", "Support.Pass")
                 return(output)
             }
 
@@ -720,8 +749,8 @@ interflex.kernel <- function(data,
 
 
             if (length(unique(true)) <= 1 | length(E.pred) < 3) { # all 0 or all 1 or few observations(auc)
-                output <- rep(NA, 5)
-                names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
+                output <- rep(NA, 6)
+                names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE", "Support.Pass")
                 return(output)
             }
 
@@ -750,12 +779,12 @@ interflex.kernel <- function(data,
                 output <- c(mse.link, mae.link, mse, mae)
             }
 
-            output <- c(eff.eval.point, output)
-            names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
+            output <- c(eff.eval.point, output, support.pass)
+            names(output) <- c("Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE", "Support.Pass")
             return(output)
         }
         cv.new <- function(bw, neval, fold.list) {
-            error <- matrix(NA, kfold * cv.repeats, 5)
+            error <- matrix(NA, kfold * cv.repeats, 6)
             rowid <- 1
             for (r in 1:cv.repeats) {
                 for (j in 1:kfold) { # K-fold CV
@@ -768,19 +797,58 @@ interflex.kernel <- function(data,
                 }
             }
 
-            colnames(error) <- c("Num.Eff.Points", "cross entropy", "auc", "L2", "L1")
+            colnames(error) <- c("Num.Eff.Points", "cross entropy", "auc", "L2", "L1", "support.pass")
             for (pp in colnames(error)) {
                 if (any(is.na(error[, pp])) & !all(is.na(error[, pp]))) {
-                    if (pp != "auc") {
-                        error[is.na(error[, pp]), pp] <- max(error[, pp], na.rm = T)
-                    } else {
+                    if (pp %in% c("auc", "support.pass")) {
                         error[is.na(error[, pp]), pp] <- min(error[, pp], na.rm = T)
+                    } else {
+                        error[is.na(error[, pp]), pp] <- max(error[, pp], na.rm = T)
                     }
                 }
             }
 
-            output <- c(bw, apply(error, 2, mean, na.rm = TRUE))
-            names(output) <- c("Num.Eff.Points", "bw", "cross entropy", "auc", "L2", "L1")
+            if (!binary) {
+                if (metric == "MSE") {
+                    fold.score <- error[, "L2"] / error[, "Num.Eff.Points"]
+                } else if (metric == "MAE") {
+                    fold.score <- error[, "L1"] / error[, "Num.Eff.Points"]
+                } else {
+                    fold.score <- rep(NA_real_, nrow(error))
+                }
+            } else {
+                if (metric == "MSE") {
+                    fold.score <- error[, "L2"] / error[, "Num.Eff.Points"]
+                } else if (metric == "MAE") {
+                    fold.score <- error[, "L1"] / error[, "Num.Eff.Points"]
+                } else if (metric == "Cross Entropy") {
+                    fold.score <- error[, "cross entropy"] / error[, "Num.Eff.Points"]
+                } else if (metric == "AUC") {
+                    fold.score <- -(error[, "auc"] * error[, "Num.Eff.Points"])
+                } else {
+                    fold.score <- rep(NA_real_, nrow(error))
+                }
+            }
+            support.pass.mean <- mean(error[, "support.pass"], na.rm = TRUE)
+            if (!is.null(cv.neff.min) && cv.neff.mode != "off") {
+                if (cv.neff.mode == "hard" && is.finite(support.pass.mean) && support.pass.mean < cv.neff.min.frac) {
+                    fold.score <- rep(Inf, length(fold.score))
+                }
+                if (cv.neff.mode == "penalty" && is.finite(support.pass.mean) && support.pass.mean < cv.neff.min.frac) {
+                    fold.score <- fold.score + cv.neff.penalty * (cv.neff.min.frac - support.pass.mean)
+                }
+            }
+            score.sd <- stats::sd(fold.score[is.finite(fold.score)], na.rm = TRUE)
+            score.n <- sum(is.finite(fold.score))
+            score.se <- if (score.n > 0 && is.finite(score.sd)) score.sd / sqrt(score.n) else NA_real_
+
+            output <- c(
+                bw,
+                apply(error, 2, mean, na.rm = TRUE),
+                mean(fold.score[is.finite(fold.score)], na.rm = TRUE),
+                score.se
+            )
+            names(output) <- c("bw", "Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE", "Support.Pass", "Score", "Score.SE")
             return(output)
         }
 
@@ -825,7 +893,7 @@ interflex.kernel <- function(data,
             }, handlers = .progress_handler("Cross-validation")))
             # return(Error)
         } else {
-            Error <- matrix(NA, length(bw.grid), 6)
+            Error <- matrix(NA, length(bw.grid), 9)
             cli::cli_progress_bar("Cross-validation", total = length(bw.grid),
                                   clear = TRUE)
             for (i in 1:length(bw.grid)) {
@@ -840,45 +908,25 @@ interflex.kernel <- function(data,
             cli::cli_progress_done()
         }
 
-        colnames(Error) <- c("bw", "Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE")
+        colnames(Error) <- c("bw", "Num.Eff.Points", "Cross Entropy", "AUC", "MSE", "MAE", "Support.Pass", "Score", "Score.SE")
         rownames(Error) <- NULL
 
-        score <- NULL
         if (!binary) {
             if (method == "poisson" | method == "nbinom") {
-                colnames(Error) <- c("bw", "Num.Eff.Points", "MSE.link", "MAE.link", "MSE", "MAE")
+                colnames(Error) <- c("bw", "Num.Eff.Points", "MSE.link", "MAE.link", "MSE", "MAE", "Support.Pass", "Score", "Score.SE")
             } else {
-                Error <- Error[, c("bw", "Num.Eff.Points", "MSE", "MAE")]
-            }
-            if (metric == "MSE") {
-                score <- Error[, "MSE"] / Error[, "Num.Eff.Points"]
-            }
-            if (metric == "MAE") {
-                score <- Error[, "MAE"] / Error[, "Num.Eff.Points"]
+                Error <- Error[, c("bw", "Num.Eff.Points", "MSE", "MAE", "Support.Pass", "Score", "Score.SE")]
             }
         }
-        if (binary) {
-            if (metric == "MSE") {
-                score <- Error[, "MSE"] / Error[, "Num.Eff.Points"]
-            }
-            if (metric == "MAE") {
-                score <- Error[, "MAE"] / Error[, "Num.Eff.Points"]
-            }
-            if (metric == "Cross Entropy") {
-                score <- Error[, "Cross Entropy"] / Error[, "Num.Eff.Points"]
-            }
-            if (metric == "AUC") {
-                score <- -(Error[, "AUC"] * Error[, "Num.Eff.Points"])
-            }
-        }
+        score <- Error[, "Score"]
         if (all(is.na(score))) {
             stop("Unable to select bandwidth: all CV scores are NA.")
         }
         min.id <- which.min(score)
         if (bw.rule == "1se") {
-            score.sd <- stats::sd(score, na.rm = TRUE)
-            if (is.finite(score.sd)) {
-                threshold <- score[min.id] + score.sd
+            score.se <- Error[min.id, "Score.SE"]
+            if (is.finite(score.se)) {
+                threshold <- score[min.id] + score.se
                 candidates <- which(score <= threshold)
                 if (length(candidates) > 0) {
                     min.id <- max(candidates)
@@ -914,6 +962,23 @@ interflex.kernel <- function(data,
     }
     X.eval <- coef.grid[, "x0"]
     neval <- length(X.eval)
+    support.neff <- NULL
+    trusted.mask <- NULL
+    trusted.range <- NULL
+    if (!is.null(cv.neff.min)) {
+        support.neff <- sapply(X.eval, function(x0) {
+            k.w <- dnorm((data[, X] - x0) / bw) * w
+            denom <- sum(k.w^2)
+            if (denom <= .Machine$double.eps) {
+                return(0)
+            }
+            (sum(k.w)^2) / denom
+        })
+        trusted.mask <- support.neff >= cv.neff.min
+        if (any(trusted.mask)) {
+            trusted.range <- range(X.eval[trusted.mask], na.rm = TRUE)
+        }
+    }
 
     if (verbose) cat(paste0("Number of evaluation points:", neval, "\n"))
 
@@ -2742,6 +2807,9 @@ interflex.kernel <- function(data,
             de.tr = treat_den, # density
             hist.out = hist.out,
             count.tr = treat.hist,
+            support.neff = support.neff,
+            trusted.mask = trusted.mask,
+            trusted.range = trusted.range,
             estimator = "kernel",
             use.fe = use_fe
         )
@@ -2787,6 +2855,9 @@ interflex.kernel <- function(data,
             de.tr = de.tr,
             hist.out = hist.out,
             count.tr = NULL,
+            support.neff = support.neff,
+            trusted.mask = trusted.mask,
+            trusted.range = trusted.range,
             estimator = "kernel",
             use.fe = use_fe
         )

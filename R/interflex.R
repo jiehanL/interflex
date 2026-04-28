@@ -38,6 +38,10 @@ interflex <- function(estimator, # "linear", "kernel", "binning" , "gam", "raw",
                       cv.repeats = 1,
                       cv.seed = NULL,
                       bw.rule = c("min"),
+                      cv.neff.min = NULL,
+                      cv.neff.min.frac = 0,
+                      cv.neff.mode = c("off", "hard", "penalty"),
+                      cv.neff.penalty = 1,
                       model.y = "rf",
                       param.y = NULL,
                       param.grid.y = NULL,
@@ -700,6 +704,19 @@ interflex <- function(estimator, # "linear", "kernel", "binning" , "gam", "raw",
     if (!bw.rule %in% c("min", "1se")) {
         stop("\"bw.rule\" must be one of: \"min\", \"1se\".")
     }
+    cv.neff.mode <- cv.neff.mode[1]
+    if (!cv.neff.mode %in% c("off", "hard", "penalty")) {
+        stop("\"cv.neff.mode\" must be one of: \"off\", \"hard\", \"penalty\".")
+    }
+    if (!is.null(cv.neff.min) && (!is.numeric(cv.neff.min) || length(cv.neff.min) != 1 || is.na(cv.neff.min) || cv.neff.min <= 0)) {
+        stop("\"cv.neff.min\" must be NULL or a positive numeric value.")
+    }
+    if (!is.numeric(cv.neff.min.frac) || length(cv.neff.min.frac) != 1 || is.na(cv.neff.min.frac) || cv.neff.min.frac < 0 || cv.neff.min.frac > 1) {
+        stop("\"cv.neff.min.frac\" must be in [0, 1].")
+    }
+    if (!is.numeric(cv.neff.penalty) || length(cv.neff.penalty) != 1 || is.na(cv.neff.penalty) || cv.neff.penalty < 0) {
+        stop("\"cv.neff.penalty\" must be a non-negative numeric value.")
+    }
 
 
     # Xunif
@@ -1202,6 +1219,10 @@ interflex <- function(estimator, # "linear", "kernel", "binning" , "gam", "raw",
             cv.repeats = cv.repeats,
             cv.seed = cv.seed,
             bw.rule = bw.rule,
+            cv.neff.min = cv.neff.min,
+            cv.neff.min.frac = cv.neff.min.frac,
+            cv.neff.mode = cv.neff.mode,
+            cv.neff.penalty = cv.neff.penalty,
             Z = Z, # covariates
             FE = FE, # fixed effects
             IV = IV, # instrumental variables
